@@ -16,12 +16,11 @@ WINDOW_HEIGHT = 720
 TAICHI_ARCH = "gpu"
 
 # ── Simulation Defaults ──────────────────────────────────────────────
-# Default initial stellar mass in solar masses (M_sun)
-# Range restricted to 8–50 M_sun (masses that produce black holes)
+# Default initial stellar mass in solar masses (M☉)
+# Range restricted to 8–50 M☉ (masses that produce black holes)
 DEFAULT_STELLAR_MASS = 20.0
 MIN_STELLAR_MASS = 8.0
 MAX_STELLAR_MASS = 50.0
-
 
 # Default simulation time scale (1.0 = real-time ratio, higher = faster)
 DEFAULT_TIME_SCALE = 1.0
