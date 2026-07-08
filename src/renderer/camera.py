@@ -32,10 +32,52 @@ class Camera:
         self.pan = np.array([0.0, 0.0], dtype=float)  # 2D screen pan offset
 
     def update_from_state(self, state):
-        """Sync camera settings with the centralized simulation state."""
-        self.zoom = state.camera_zoom
-        self.pan[0] = state.camera_center[0]
-        self.pan[1] = state.camera_center[1]
+        """Sync camera settings with the centralized simulation state using cinematic transitions."""
+        # Use state.dt, with a fallback if simulation is paused to keep camera responsive
+        dt = state.dt if (state.dt > 0.0 and not state.paused) else 0.016
+        
+        target_zoom = 1.0
+        target_pan = np.array([0.0, 0.0], dtype=float)
+        
+        phase = state.current_phase
+        progress = state.phase_progress
+        
+        if phase == "stellar_birth":
+            target_zoom = 1.0
+        elif phase == "stellar_death":
+            if progress < 0.7:
+                # Expand to red supergiant: zoom out from 1.0 to 0.15
+                t_exp = progress / 0.7
+                target_zoom = 1.0 + (0.15 - 1.0) * (1.0 - (1.0 - t_exp) ** 2.0)
+            else:
+                # Stay zoomed out for the start of core collapse
+                target_zoom = 0.15
+        elif phase == "supernova":
+            if progress < 0.35:
+                # Supernova explosion: stay zoomed out to frame the expanding ejecta
+                target_zoom = 0.15
+                # Apply camera shake during the shockwave peak
+                shake_t = progress / 0.35
+                shake_amp = 0.03 * np.exp(-3.0 * shake_t) * np.sin(state.time * 70.0)
+                target_pan[0] += shake_amp
+                target_pan[1] += shake_amp * 0.7
+            else:
+                # Core collapse fallback: zoom in smoothly from 0.15 to 1.8
+                t_zoom = (progress - 0.35) / 0.65
+                target_zoom = 0.15 + (1.8 - 0.15) * (t_zoom ** 2.0)
+        elif phase == "black_hole":
+            target_zoom = 1.8
+            
+        # Smoothly interpolate towards target settings
+        lerp_speed = 3.0
+        step = min(1.0, dt * lerp_speed)
+        self.zoom += (target_zoom - self.zoom) * step
+        self.pan += (target_pan - self.pan) * step
+        
+        # Write back to state so other systems remain in sync
+        state.camera_zoom = float(self.zoom)
+        state.camera_center[0] = float(self.pan[0])
+        state.camera_center[1] = float(self.pan[1])
 
     def project_3d_direction(self, direction_vec):
         """

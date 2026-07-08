@@ -135,27 +135,60 @@ class SimulationEngine:
             self.state.remnant_mass = phys["remnant_mass"]
 
     def _update_supernova(self, dt):
-        """Physics update for supernova explosion phase."""
+        """Physics update for supernova explosion phase with core collapse and fallback accretion."""
         import numpy as np
         from src.physics.stellar import compute_stellar_properties
+        from src.physics.collapse import calculate_collapse_physics, get_remnant_mass
         
         # Supernova phase takes 8 seconds in visual simulation time
         target_supernova_seconds = 8.0
         self.state.phase_progress = min(1.0, self.state.phase_progress + dt / target_supernova_seconds)
-        
-        # 1. Supernova flash intensity (peaks at core bounce, decays exponentially)
-        self.state.supernova_flash = 20.0 * np.exp(-5.0 * self.state.phase_progress)
-        
-        # 2. Envelope expansion (gas shell expands rapidly)
+        progress = self.state.phase_progress
+
         props = compute_stellar_properties(self.state.stellar_mass)
-        r_supergiant = props["radius"] * 100.0
-        self.state.stellar_radius = r_supergiant * (1.0 + 8.0 * (self.state.phase_progress ** 1.5))
+        r_main = props["radius"]
+        r_supergiant = r_main * 100.0
+        remnant_m = get_remnant_mass(self.state.stellar_mass)
+        self.state.remnant_mass = remnant_m
+
+        # 1. Supernova flash intensity (dual-peak: first at explosion, second at event horizon formation)
+        flash1 = 20.0 * np.exp(-15.0 * progress)
+        flash2 = 0.0
+        if progress >= 0.7:
+            # Brief peak at 0.85 progress representing the collapse bounce/horizon flash
+            flash2 = 8.0 * np.exp(-40.0 * ((progress - 0.85) ** 2.0))
+        self.state.supernova_flash = flash1 + flash2
         
-        # 3. Cooling of ejecta
-        self.state.stellar_temperature = 100000.0 * np.exp(-3.0 * self.state.phase_progress) + 3000.0
+        # 2. Envelope expansion (gas shell expands rapidly outwards)
+        self.state.stellar_radius = r_supergiant * (1.0 + 8.0 * (progress ** 1.5))
         
-        # 4. Supernova luminosity (peaks at 2 billion solar luminosities)
-        self.state.stellar_luminosity = 2.0e9 * np.exp(-3.5 * self.state.phase_progress)
+        # 3. Remnant Core Collapse Morphing
+        # Core becomes visible after the envelope begins to thin (progress >= 0.3)
+        if progress < 0.3:
+            self.state.core_radius = 0.0
+            self.state.core_density = 1e6
+            self.state.core_temperature = 3e9
+        else:
+            t_collapse = (progress - 0.3) / 0.7  # normalized collapse progress [0.0, 1.0]
+            
+            # Core shrinks from standard iron core size (~0.15 * r_main) to Schwarzschild radius
+            # Schwarzschild radius visually corresponds to 0.536 R_sun on our reference scale
+            r_start = r_main * 0.15
+            r_end = 0.536
+            
+            # Smooth exponential decay simulating accelerating gravity collapse
+            self.state.core_radius = r_start + (r_end - r_start) * (1.0 - np.exp(-4.5 * t_collapse)) / (1.0 - np.exp(-4.5))
+            
+            # Core parameters scale up towards black hole densities/temperatures
+            phys = calculate_collapse_physics(t_collapse, self.state.stellar_mass)
+            self.state.core_density = phys["core_density"]
+            self.state.core_temperature = phys["core_temperature"]
+
+        # 4. Cooling of expanding ejecta envelope
+        self.state.stellar_temperature = 100000.0 * np.exp(-3.0 * progress) + 3000.0
+        
+        # 5. Supernova luminosity (decays over time)
+        self.state.stellar_luminosity = 2.0e9 * np.exp(-3.5 * progress)
 
     def _update_black_hole(self, dt):
         """Physics update for event horizon, accretion, and lensing phase."""

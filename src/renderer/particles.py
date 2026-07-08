@@ -3,6 +3,7 @@ GPU Particle System.
 
 Manages collections of particles on the GPU using Taichi parallel kernels.
 Simulates supernova ejecta shells, shockwaves, expansion velocities,
+ballistic stellar prominence loops, infalling accretion spirals,
 and color/brightness decay.
 
 Milestone: 6 (Supernova particles)
@@ -81,47 +82,142 @@ class ParticleSystem:
             self.max_life[i] = life_sec
             self.active[i] = 1
 
+    @ti.kernel
+    def spawn_stellar_prominence(
+        self,
+        center_x: ti.f32,
+        center_y: ti.f32,
+        radius: ti.f32,
+        aspect_ratio: ti.f32,
+        time: ti.f32,
+        count: ti.i32
+    ):
+        """GPU kernel to spawn solar prominences (H-alpha pinkish-red loops) along the stellar limb."""
+        for i in range(self.max_particles):
+            # Only spawn in a small subset of fields that are inactive
+            if self.active[i] == 0 and i < count:
+                # Distribute angles around the limb
+                angle = time * 0.2 + (i * 153.25) % 6.28318
+                
+                # Position on the limb
+                self.pos[i] = ti.Vector([
+                    center_x + ti.cos(angle) * radius,
+                    center_y + ti.sin(angle) * radius * aspect_ratio
+                ])
+                
+                # Eject particles slightly outward and tangentially (magnetic looping)
+                radial_dir = ti.Vector([ti.cos(angle), ti.sin(angle) * aspect_ratio])
+                tangent_dir = ti.Vector([-ti.sin(angle), ti.cos(angle) * aspect_ratio])
+                
+                # Ballistic velocity
+                v_out = 0.08 + 0.04 * ti.sin(i * 45.67)
+                v_tang = 0.04 * ti.cos(i * 78.91)
+                self.vel[i] = radial_dir * v_out + tangent_dir * v_tang
+                
+                # Prominences emit primarily in Hydrogen-alpha (deep pinkish red)
+                self.color[i] = ti.Vector([1.0, 0.15, 0.25])
+                
+                life_sec = 0.6 + 0.5 * (ti.sin(i * 99.9) * 0.5 + 0.5)
+                self.life[i] = life_sec
+                self.max_life[i] = life_sec
+                self.active[i] = 1
+
+    @ti.kernel
+    def spawn_infall_gas(
+        self,
+        center_x: ti.f32,
+        center_y: ti.f32,
+        radius: ti.f32,
+        aspect_ratio: ti.f32,
+        count: ti.i32
+    ):
+        """GPU kernel to spawn infalling accretion plasma particles at the outer edge."""
+        for i in range(self.max_particles):
+            if self.active[i] == 0 and i < count:
+                angle = (i * 245.71) % 6.28318
+                self.pos[i] = ti.Vector([
+                    center_x + ti.cos(angle) * radius,
+                    center_y + ti.sin(angle) * radius * aspect_ratio
+                ])
+                
+                # Velocity: Keplerian swirl + slight inward spiral
+                radial_dir = ti.Vector([ti.cos(angle), ti.sin(angle) * aspect_ratio])
+                tangent_dir = ti.Vector([-ti.sin(angle), ti.cos(angle) * aspect_ratio])
+                
+                self.vel[i] = tangent_dir * 0.12 - radial_dir * 0.05
+                self.color[i] = ti.Vector([0.9, 0.45, 0.1]) # Hot accretion color
+                
+                life_sec = 3.0
+                self.life[i] = life_sec
+                self.max_life[i] = life_sec
+                self.active[i] = 1
+
     @ti.func
     def num_active_guess_factor(self):
         """Helper to get scaling factor for spawning distributions."""
         return float(self.max_particles)
 
     @ti.kernel
-    def update_particles_kernel(self, dt: ti.f32):
-        """Update particle positions and fade color intensities based on remaining lifetime."""
+    def update_particles_kernel(
+        self,
+        dt: ti.f32,
+        center_x: ti.f32,
+        center_y: ti.f32,
+        gravity_accel: ti.f32,
+        spin_accel: ti.f32
+    ):
+        """Update particle positions, apply gravitational pull, swirling force, and fade color intensities."""
         for i in range(self.max_particles):
             if self.active[i] == 1:
-                # Move particle
+                # 1. Move particle
                 self.pos[i] += self.vel[i] * dt
                 
-                # Apply slow drag / expansion cooling slowing down
-                self.vel[i] *= ti.exp(-0.4 * dt)
+                # 2. Physics: Gravitational pull towards the center
+                dx = self.pos[i][0] - center_x
+                dy = self.pos[i][1] - center_y
+                r = ti.sqrt(dx*dx + dy*dy)
                 
-                # Age decay
+                if r > 1e-3:
+                    # Acceleration ∝ -G * M / r^2
+                    # Radial direction vector
+                    rx = dx / r
+                    ry = dy / r
+                    
+                    self.vel[i][0] -= (gravity_accel * dt / (r * r)) * rx
+                    self.vel[i][1] -= (gravity_accel * dt / (r * r)) * ry
+                    
+                    # Rotational / Swirling force (conservation of angular momentum / Keplerian shear)
+                    tx = -ry
+                    ty = rx
+                    self.vel[i][0] += (spin_accel * dt / (r * r)) * tx
+                    self.vel[i][1] += (spin_accel * dt / (r * r)) * ty
+                
+                # Apply gas drag / friction
+                self.vel[i] *= ti.exp(-0.25 * dt)
+                
+                # 3. Age decay
                 self.life[i] -= dt
-                if self.life[i] <= 0.0:
+                if self.life[i] <= 0.0 or (r < 0.015 and gravity_accel > 0.0):
+                    # Particle falls into event horizon or dies
                     self.active[i] = 0
                     self.pos[i] = ti.Vector([-10.0, -10.0])
                     self.color[i] = ti.Vector([0.0, 0.0, 0.0])
                 else:
-                    # Calculate remaining life ratio
                     ratio = self.life[i] / self.max_life[i]
                     
-                    # Shift color from hot bright yellow/white to cool dark red as gas cools
+                    # Thermal cooling shift
                     if ratio < 0.6:
-                        # Fade to orange/red
-                        self.color[i].y *= ti.exp(-0.8 * dt) # Dim green (creates red shift)
-                        self.color[i].z *= ti.exp(-1.5 * dt) # Dim blue (creates red shift)
+                        # Fade to red-orange
+                        self.color[i].y *= ti.exp(-0.8 * dt)
+                        self.color[i].z *= ti.exp(-1.5 * dt)
                     
-                    # Overall intensity fade out
                     self.color[i] *= ratio
 
-    def update(self, dt):
-        """Advance the particle simulation step."""
-        self.update_particles_kernel(dt)
+    def update(self, dt, center_x=0.5, center_y=0.5, gravity=0.0, spin=0.0):
+        """Advance the particle simulation step, applying central forces."""
+        self.update_particles_kernel(dt, center_x, center_y, gravity, spin)
 
     def render(self, canvas):
         """Draw particles onto the canvas."""
-        # Use small radius for debris particles
         radius = 0.003
         canvas.circles(self.pos, radius=radius, per_vertex_color=self.color)

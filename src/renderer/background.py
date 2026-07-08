@@ -103,9 +103,12 @@ class BackgroundStarfield:
         aspect_ratio: ti.f32,
         pan_x: ti.f32,
         pan_y: ti.f32,
-        mask_radius: ti.f32
+        mask_radius: ti.f32,
+        phase: ti.i32,
+        remnant_mass: ti.f32,
+        progress: ti.f32
     ):
-        """Project 3D directions of stars into 2D screen positions in parallel on GPU."""
+        """Project 3D directions of stars into 2D screen positions in parallel, applying gravitational lensing when black hole/collapsing remnant is present."""
         for i in range(self.num_stars):
             x = self.star_dirs[i][0]
             y = self.star_dirs[i][1]
@@ -125,7 +128,7 @@ class BackgroundStarfield:
 
             # Determine visibility (only project stars in front of camera plane)
             if z_final > 0.05:
-                # Perspective projection
+                # Standard perspective projection
                 ndc_x = (x_rot1 / z_final) * zoom
                 ndc_y = (y_rot / z_final) * zoom * aspect_ratio
 
@@ -133,16 +136,60 @@ class BackgroundStarfield:
                 u = 0.5 + 0.5 * ndc_x + pan_x
                 v = 0.5 + 0.5 * ndc_y + pan_y
 
-                # Apply occlusion mask if star is in front and overlaps the star body
+                # Apply occlusion or lensing distortion
                 is_occluded = False
-                if mask_radius > 0.0:
-                    r_bound = 0.45 * (mask_radius / 6.034)
+                
+                # Check if we should apply lensing (phase 3 is black hole, phase 2 is supernova)
+                # During supernova phase, lensing grows in the final stage (collapse progress >= 0.5)
+                is_lensing = False
+                lensing_factor = 0.0
+                if phase == 3:
+                    is_lensing = True
+                    lensing_factor = 1.0
+                elif phase == 2 and progress >= 0.5:
+                    is_lensing = True
+                    # Scale from 0.0 to 1.0 as core collapse progresses
+                    lensing_factor = (progress - 0.5) / 0.5
+
+                if is_lensing:
+                    # Gravitational lensing deflection math:
+                    # Calculate Einstein radius in NDC coordinates (scales with remnant mass)
+                    theta_E = 0.06 * (remnant_mass / 3.0) * lensing_factor
+                    
                     du = u - 0.5 - pan_x
                     dv = (v - 0.5 - pan_y) / aspect_ratio
                     dx = du / zoom
                     dy = dv / zoom
-                    if ti.sqrt(dx*dx + dy*dy) <= r_bound:
+                    theta_in = ti.sqrt(dx*dx + dy*dy)
+                    
+                    if theta_in > 1e-5:
+                        # Solve lens equation: theta_out^2 - theta_in * theta_out - theta_E^2 = 0
+                        scale = 0.5 * (1.0 + ti.sqrt(1.0 + 4.0 * theta_E * theta_E / (theta_in * theta_in)))
+                        lensed_dx = dx * scale
+                        lensed_dy = dy * scale
+                        
+                        # Re-project to screen coordinates
+                        ndc_x_l = lensed_dx * zoom
+                        ndc_y_l = lensed_dy * zoom / aspect_ratio
+                        u = 0.5 + 0.5 * ndc_x_l + pan_x
+                        v = 0.5 + 0.5 * ndc_y_l + pan_y
+                        
+                        # Event horizon occlusion check (shadow radius is ~2.6 * r_s visually)
+                        r_eh = 0.04 * lensing_factor
+                        if ti.sqrt(lensed_dx*lensed_dx + lensed_dy*lensed_dy) <= r_eh:
+                            is_occluded = True
+                    else:
                         is_occluded = True
+                else:
+                    # Normal stellar body occlusion mask
+                    if mask_radius > 0.0:
+                        r_bound = 0.45 * (mask_radius / 6.034)
+                        du = u - 0.5 - pan_x
+                        dv = (v - 0.5 - pan_y) / aspect_ratio
+                        dx = du / zoom
+                        dy = dv / zoom
+                        if ti.sqrt(dx*dx + dy*dy) <= r_bound:
+                            is_occluded = True
 
                 if not is_occluded:
                     self.screen_pos[i] = ti.Vector([u, v])
@@ -155,8 +202,8 @@ class BackgroundStarfield:
                 self.screen_pos[i] = ti.Vector([-10.0, -10.0])
                 self.render_colors[i] = ti.Vector([0.0, 0.0, 0.0])
 
-    def update(self, camera, mask_radius=0.0):
-        """Update star projections based on the camera view and occlusion mask."""
+    def update(self, camera, mask_radius, phase, remnant_mass, progress):
+        """Update star projections based on the camera view, phase, and lensing parameters."""
         self._project_stars_kernel(
             camera.yaw,
             camera.pitch,
@@ -164,7 +211,10 @@ class BackgroundStarfield:
             camera.aspect_ratio,
             camera.pan[0],
             camera.pan[1],
-            mask_radius
+            mask_radius,
+            phase,
+            remnant_mass,
+            progress
         )
 
     def render(self, canvas):

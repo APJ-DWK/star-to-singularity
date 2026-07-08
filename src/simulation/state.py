@@ -35,6 +35,7 @@ class SimulationState:
         self.supernova_flash = 0.0  # Brightness multiplier for explosion flash
         self.remnant_mass = 0.0     # M_sun
         self.supernova_trigger = False # Spawns particles in renderer when True
+        self.core_radius = 0.0      # Solar radii (remnant core)
 
         # ── Stellar Parameters ───────────────────────────────────────
         self.stellar_mass = config.DEFAULT_STELLAR_MASS  # Initial mass in M☉
@@ -73,6 +74,7 @@ class SimulationState:
         self.supernova_flash = 0.0
         self.remnant_mass = 0.0
         self.supernova_trigger = False
+        self.core_radius = 0.0
 
         self.stellar_mass = config.DEFAULT_STELLAR_MASS
         self.stellar_radius = 1.0
