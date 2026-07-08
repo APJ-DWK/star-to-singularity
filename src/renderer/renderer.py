@@ -12,6 +12,8 @@ import taichi as ti
 
 from src.renderer.background import BackgroundStarfield
 from src.renderer.camera import Camera
+from src.renderer.particles import ParticleSystem
+import config
 
 
 # ── GPU Math & Noise Functions ───────────────────────────────────────
@@ -107,7 +109,7 @@ class Renderer:
     """
     Main manager for visual presentation.
 
-    Maintains the virtual camera, background starfield, and physical star rendering,
+    Maintains the virtual camera, background starfield, particle systems, and physical star rendering,
     compositing them onto the Taichi window Canvas.
     """
 
@@ -118,6 +120,7 @@ class Renderer:
         # Initialize core components
         self.camera = Camera(width, height)
         self.starfield = BackgroundStarfield()
+        self.particles = ParticleSystem(config.MAX_PARTICLES)
 
         # Render pass toggles
         self.show_background = True
@@ -128,7 +131,7 @@ class Renderer:
         self.star_image = ti.Vector.field(3, dtype=ti.f32, shape=(self.star_img_width, self.star_img_height))
 
     @ti.kernel
-    def _render_star_kernel(
+    def _render_scene_kernel(
         self,
         radius: ti.f32,
         temperature: ti.f32,
@@ -136,74 +139,131 @@ class Renderer:
         zoom: ti.f32,
         pan_x: ti.f32,
         pan_y: ti.f32,
-        aspect_ratio: ti.f32
+        aspect_ratio: ti.f32,
+        phase: ti.i32,
+        progress: ti.f32,
+        flash: ti.f32,
+        pitch: ti.f32,
+        yaw: ti.f32
     ):
-        """GPU pixel shader to render the star surface, limb darkening, convection, corona, and bloom."""
+        """Unified GPU pixel shader to render the star (main sequence / red supergiant), supernova explosion, and event horizon."""
         for i, j in self.star_image:
-            # 1. Normalize pixel coordinate to [0, 1]
             u = i / self.star_img_width
             v = j / self.star_img_height
             
-            # Displacement from center, correcting for aspect ratio
             du = u - 0.5 - pan_x
             dv = (v - 0.5 - pan_y) / aspect_ratio
             
-            # Scale by camera zoom factor to yield Normalized Device Coordinates
             dx = du / zoom
             dy = dv / zoom
             dist = ti.sqrt(dx*dx + dy*dy)
             
-            # Reference star of M = 20 M_sun has radius R = 6.034 R_sun.
-            # Map this reference radius to 0.45 of the viewport half-height.
-            r_bound = 0.45 * (radius / 6.034)
-            
             color = ti.Vector([0.0, 0.0, 0.0])
             
-            if dist <= r_bound:
-                # ── STAR SURFACE Pass ────────────────────────────────────────
-                # Reconstruct z-coordinate of sphere
-                z = ti.sqrt(r_bound*r_bound - dist*dist)
+            if phase == 0 or phase == 1 or phase == 2:
+                # ── STAR & SUPERNOVA Pass ────────────────────────────────────
+                # Map reference radius of M = 20 M_sun (6.034 R_sun) to 0.45 of viewport
+                r_bound = 0.45 * (radius / 6.034)
                 
-                # 3D surface point on celestial sphere
-                p = ti.Vector([dx, dy, z])
+                if dist <= r_bound:
+                    z = ti.sqrt(r_bound*r_bound - dist*dist)
+                    p = ti.Vector([dx, dy, z])
+                    
+                    angle = time * 0.05
+                    ca = ti.cos(angle)
+                    sa = ti.sin(angle)
+                    p_rot = ti.Vector([ca * p.x - sa * p.z, p.y, sa * p.x + ca * p.z])
+                    
+                    # Convection noise configuration based on phase
+                    freq = 22.0
+                    if phase == 1:
+                        # Larger convection cells for red supergiant
+                        freq = 12.0
+                    elif phase == 2:
+                        # Huge chaotic filament structures during supernova expansion
+                        freq = 6.0
+                        
+                    granulation = fbm(p_rot * freq + ti.Vector([0.0, 0.0, time * 0.4]))
+                    
+                    mu = z / r_bound
+                    u_ld = 0.40
+                    limb_factor = 1.0 - u_ld * (1.0 - mu)
+                    
+                    local_temp = temperature * (1.0 + (granulation - 0.5) * 0.07)
+                    surf_color = temp_to_rgb_gpu(local_temp) * limb_factor
+                    
+                    if phase == 2:
+                        # Supernova envelope gas shell dims/disperses as it expands
+                        fade = ti.max(0.0, 1.0 - progress)
+                        color = surf_color * fade
+                    else:
+                        color = surf_color
+                else:
+                    # Outside Star: Corona & Bloom
+                    dist_ratio = (dist - r_bound) / r_bound
+                    corona_intensity = ti.exp(-dist_ratio * 14.0)
+                    corona_color = temp_to_rgb_gpu(temperature * 1.2)
+                    
+                    bloom_intensity = ti.exp(-dist_ratio * 1.8)
+                    bloom_color = temp_to_rgb_gpu(temperature)
+                    
+                    color = (corona_color * corona_intensity * 0.45) + (bloom_color * bloom_intensity * 0.18)
+                    
+                    if phase == 2:
+                        # Supernova fade out
+                        fade = ti.max(0.0, 1.0 - progress)
+                        color *= fade
                 
-                # Apply Y-axis axial rotation over time
-                angle = time * 0.05
-                ca = ti.cos(angle)
-                sa = ti.sin(angle)
-                p_rot = ti.Vector([ca * p.x - sa * p.z, p.y, sa * p.x + ca * p.z])
+                # Add supernova core bounce flash overlay across the screen
+                if phase == 2:
+                    color += ti.Vector([1.0, 0.95, 0.9]) * flash
+                    
+            elif phase == 3:
+                # ── BLACK HOLE Pass ──────────────────────────────────────────
+                r_eh = 0.04  # Screen-space event horizon visual boundary
                 
-                # Sample multi-scale noise to simulate surface convection (granulation cells)
-                # Offset noise coordinates over time to represent rising/sinking plasma
-                granulation = fbm(p_rot * 22.0 + ti.Vector([0.0, 0.0, time * 0.4]))
+                # Project the accretion disk based on pitch tilt angle
+                tilt = ti.max(0.15, ti.abs(ti.sin(pitch)))
                 
-                # Apply Limb Darkening: Standard linear profile I(mu)/I(1) = 1 - u_ld * (1 - mu)
-                # Where mu = cos(theta) = z / R
-                mu = z / r_bound
-                u_ld = 0.40  # Limb darkening coefficient for hot stellar surfaces
-                limb_factor = 1.0 - u_ld * (1.0 - mu)
+                # Rotate disk coordinates around camera yaw to match space orientation
+                cy = ti.cos(yaw)
+                sy = ti.sin(yaw)
+                rx = dx * cy - dy * sy
+                ry = dx * sy + dy * cy
                 
-                # Granulation modulates the surface temperature locally by ±3.5%
-                local_temp = temperature * (1.0 + (granulation - 0.5) * 0.07)
+                dist_disk = ti.sqrt(rx * rx + (ry / tilt) ** 2.0)
                 
-                # Color the surface using blackbody approximation and apply limb darkening
-                color = temp_to_rgb_gpu(local_temp) * limb_factor
+                r_in = r_eh * 1.5
+                r_out = r_eh * 6.0
                 
-            else:
-                # ── CORONA & BLOOM Pass ──────────────────────────────────────
-                # Distance scale factor starting outside the stellar limb
-                dist_ratio = (dist - r_bound) / r_bound
-                
-                # Corona: faint high-temperature atmosphere (decays rapidly)
-                corona_intensity = ti.exp(-dist_ratio * 14.0)
-                corona_color = temp_to_rgb_gpu(temperature * 1.2)
-                
-                # Bloom: optical lens scattering (decays slowly)
-                bloom_intensity = ti.exp(-dist_ratio * 1.8)
-                bloom_color = temp_to_rgb_gpu(temperature)
-                
-                color = (corona_color * corona_intensity * 0.45) + (bloom_color * bloom_intensity * 0.18)
-                
+                if dist <= r_eh:
+                    color = ti.Vector([0.0, 0.0, 0.0])  # Singular darkness inside event horizon
+                elif dist_disk >= r_in and dist_disk <= r_out:
+                    # Accretion disk thin gaseous glow
+                    # Temperature profile from Novikov-Thorne limit: T ∝ r^-0.75
+                    t_disk = 1.2e7 * ti.pow(r_in / dist_disk, 0.75)
+                    
+                    # Accretion density wave fBm modulation
+                    angle = ti.atan2(ry / tilt, rx) - time * 1.2
+                    gas = fbm(ti.Vector([dist_disk * 120.0, angle * 4.0, time * 0.3]))
+                    local_temp = t_disk * (0.8 + gas * 0.4)
+                    
+                    disk_color = temp_to_rgb_gpu(local_temp)
+                    
+                    # Relativistic Doppler Beaming factor
+                    # Side moving towards camera (negative rx side) is beamed and shifted
+                    cp = ti.cos(pitch)
+                    beaming = 1.0 + 0.6 * cp * (-rx / dist_disk)
+                    
+                    # Smoothly fade boundaries of the disk
+                    edge_fade = ti.sin((dist_disk - r_in) / (r_out - r_in) * 3.14159265)
+                    
+                    color = disk_color * beaming * edge_fade * 0.9
+                else:
+                    # Background bloom scattering from the accretion disk
+                    bloom_intensity = ti.exp(-(dist - r_eh) / r_eh * 1.5)
+                    color = temp_to_rgb_gpu(4000.0) * bloom_intensity * 0.08
+                    
             self.star_image[i, j] = color
 
     def render(self, state, canvas):
@@ -218,58 +278,71 @@ class Renderer:
         self.camera.update_from_state(state)
 
         # 2. Determine background star masking radius
+        # For black hole phase, we occlude stars exactly behind the event horizon (0.04 boundary)
         mask_radius = 0.0
         if state.current_phase in ["stellar_birth", "stellar_death"]:
             mask_radius = state.stellar_radius
+        elif state.current_phase == "black_hole":
+            mask_radius = 0.536  # Calibrated so r_bound matches EH visual boundary
 
         # 3. Update background starfield
         if self.show_background:
             self.starfield.update(self.camera, mask_radius)
 
-        # 4. Render stellar surface to full-screen texture
+        # 4. Map phase name to integer for unified GPU shader
+        phase_int = 0
         if state.current_phase == "stellar_birth":
-            self._render_stellar_birth(state, canvas)
+            phase_int = 0
+            # Reset particles when starting over or reset
+            self.particles.reset()
         elif state.current_phase == "stellar_death":
-            self._render_stellar_death(state, canvas)
-        else:
-            # Deep space clear for other phases
-            canvas.set_background_color((0.01, 0.01, 0.02))
+            phase_int = 1
+        elif state.current_phase == "supernova":
+            phase_int = 2
+        elif state.current_phase == "black_hole":
+            phase_int = 3
 
-        # 5. Composite background stars ON TOP of background textures/glows
+        # 5. Handle supernova particle trigger
+        if state.supernova_trigger:
+            state.supernova_trigger = False
+            center_x = 0.5 + self.camera.pan[0]
+            center_y = 0.5 + self.camera.pan[1]
+            base_color = ti.Vector([1.0, 0.6, 0.3]) # hot gas ejecta color
+            self.particles.reset()
+            self.particles.spawn_supernova_ejecta(
+                center_x,
+                center_y,
+                0.05,  # min speed
+                0.35,  # max speed
+                base_color,
+                self.camera.aspect_ratio
+            )
+
+        # 6. Update particle positions and colors
+        self.particles.update(state.dt)
+
+        # 7. Execute unified GPU shader scene render pass
+        self._render_scene_kernel(
+            state.stellar_radius,
+            state.stellar_temperature,
+            state.time,
+            self.camera.zoom,
+            self.camera.pan[0],
+            self.camera.pan[1],
+            self.camera.aspect_ratio,
+            phase_int,
+            state.phase_progress,
+            state.supernova_flash,
+            self.camera.pitch,
+            self.camera.yaw
+        )
+        canvas.set_image(self.star_image)
+
+        # 8. Composite background stars
         if self.show_background:
             self.starfield.render(canvas)
 
-    def _render_stellar_birth(self, state, canvas):
-        """Render main sequence star surface and solar wind."""
-        self._render_star_kernel(
-            state.stellar_radius,
-            state.stellar_temperature,
-            state.time,
-            self.camera.zoom,
-            self.camera.pan[0],
-            self.camera.pan[1],
-            self.camera.aspect_ratio
-        )
-        canvas.set_image(self.star_image)
-
-    def _render_stellar_death(self, state, canvas):
-        """Render contracting core and silicon shell burning."""
-        self._render_star_kernel(
-            state.stellar_radius,
-            state.stellar_temperature,
-            state.time,
-            self.camera.zoom,
-            self.camera.pan[0],
-            self.camera.pan[1],
-            self.camera.aspect_ratio
-        )
-        canvas.set_image(self.star_image)
-
-    def _render_supernova(self, state, canvas):
-        """Render expanding supernova gas shell and central core."""
-        pass
-
-    def _render_black_hole(self, state, canvas):
-        """Render event horizon, photon sphere, and accretion disk."""
-        pass
+        # 9. Composite supernova particles
+        if state.current_phase in ["supernova", "black_hole"]:
+            self.particles.render(canvas)
 

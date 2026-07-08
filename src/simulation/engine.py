@@ -76,22 +76,106 @@ class SimulationEngine:
         self.state.stellar_age = min(self.state.stellar_age + age_increment_years, lifetime)
         self.state.stellar_hydrogen = max(0.0, 1.0 - (self.state.stellar_age / lifetime))
 
-        # If hydrogen fuel is depleted, freeze simulation time expansion
-        if self.state.stellar_hydrogen <= 0.0:
-            self.state.paused = True
-            print("  [Simulation] Hydrogen exhausted! Stellar core collapse imminent.")
-
     def _update_stellar_death(self, dt):
-        """Physics update for core collapse phase."""
-        # Stub: to be populated in Milestone 5.
-        pass
+        """Physics update for red supergiant expansion and core collapse phase."""
+        import numpy as np
+        from src.physics.stellar import compute_stellar_properties
+        from src.physics.collapse import calculate_collapse_physics
+
+        # Let's make the red supergiant + collapse phase take 12 seconds in visual simulation time
+        target_death_seconds = 12.0
+        self.state.phase_progress = min(1.0, self.state.phase_progress + dt / target_death_seconds)
+
+        props = compute_stellar_properties(self.state.stellar_mass)
+        r_main = props["radius"]
+        t_main = props["temperature"]
+
+        # We divide the phase into:
+        # - progress [0.0, 0.7]: Red Supergiant Expansion
+        # - progress [0.7, 1.0]: Core Instability & Core Collapse
+        if self.state.phase_progress < 0.7:
+            t_exp = self.state.phase_progress / 0.7
+            
+            # Radius expands up to 100x the main sequence radius (Red Supergiant stage)
+            # Smoothly expand using a cubic ease-out shape
+            scale_factor = 1.0 + (100.0 - 1.0) * (1.0 - (1.0 - t_exp) ** 3.0)
+            self.state.stellar_radius = r_main * scale_factor
+            
+            # Temperature drops to ~3200 K (Red Supergiant temperature)
+            self.state.stellar_temperature = t_main + (3200.0 - t_main) * (1.0 - (1.0 - t_exp) ** 2.0)
+            
+            # Luminosity = R^2 * (T/5778)^4
+            r_ratio = self.state.stellar_radius
+            t_ratio = self.state.stellar_temperature / 5778.0
+            self.state.stellar_luminosity = (r_ratio ** 2.0) * (t_ratio ** 4.0)
+            
+            # Age continues past main sequence into supergiant lifetime (~10% extension)
+            self.state.stellar_age = props["lifetime"] + (0.1 * props["lifetime"]) * self.state.phase_progress
+            
+            # Core parameters are pre-collapse
+            self.state.core_density = 1.5e5
+            self.state.core_temperature = 1.2e8
+        else:
+            t_collapse = (self.state.phase_progress - 0.7) / 0.3
+            
+            # Rapid core collapse & outer shell instability (pulsations)
+            pulsation = 1.0 + 0.03 * np.sin(self.state.time * 6.0)
+            r_supergiant = r_main * 100.0
+            self.state.stellar_radius = r_supergiant * pulsation
+            self.state.stellar_temperature = 3200.0
+            
+            r_ratio = self.state.stellar_radius
+            t_ratio = self.state.stellar_temperature / 5778.0
+            self.state.stellar_luminosity = (r_ratio ** 2.0) * (t_ratio ** 4.0)
+            
+            # Compute physical core collapse metrics
+            phys = calculate_collapse_physics(t_collapse, self.state.stellar_mass)
+            self.state.core_density = phys["core_density"]
+            self.state.core_temperature = phys["core_temperature"]
+            self.state.remnant_mass = phys["remnant_mass"]
 
     def _update_supernova(self, dt):
         """Physics update for supernova explosion phase."""
-        # Stub: to be populated in Milestone 6.
-        pass
+        import numpy as np
+        from src.physics.stellar import compute_stellar_properties
+        
+        # Supernova phase takes 8 seconds in visual simulation time
+        target_supernova_seconds = 8.0
+        self.state.phase_progress = min(1.0, self.state.phase_progress + dt / target_supernova_seconds)
+        
+        # 1. Supernova flash intensity (peaks at core bounce, decays exponentially)
+        self.state.supernova_flash = 20.0 * np.exp(-5.0 * self.state.phase_progress)
+        
+        # 2. Envelope expansion (gas shell expands rapidly)
+        props = compute_stellar_properties(self.state.stellar_mass)
+        r_supergiant = props["radius"] * 100.0
+        self.state.stellar_radius = r_supergiant * (1.0 + 8.0 * (self.state.phase_progress ** 1.5))
+        
+        # 3. Cooling of ejecta
+        self.state.stellar_temperature = 100000.0 * np.exp(-3.0 * self.state.phase_progress) + 3000.0
+        
+        # 4. Supernova luminosity (peaks at 2 billion solar luminosities)
+        self.state.stellar_luminosity = 2.0e9 * np.exp(-3.5 * self.state.phase_progress)
 
     def _update_black_hole(self, dt):
         """Physics update for event horizon, accretion, and lensing phase."""
-        # Stub: to be populated in Milestones 7-10.
-        pass
+        import numpy as np
+        from src.physics.collapse import get_remnant_mass
+        from src.physics.constants import M_SUN, G, C
+        
+        remnant_m = get_remnant_mass(self.state.stellar_mass)
+        self.state.remnant_mass = remnant_m
+        
+        # Calculate black hole parameters
+        self.state.black_hole_mass = remnant_m * M_SUN
+        
+        # Schwarzschild radius: r_s = 2GM/c^2
+        self.state.schwarzschild_radius = 2.0 * G * self.state.black_hole_mass / (C ** 2.0)
+        self.state.photon_sphere_radius = 1.5 * self.state.schwarzschild_radius
+        self.state.isco_radius = 3.0 * self.state.schwarzschild_radius
+        
+        # Accretion rate simulation (accretion grows to a steady state)
+        self.state.accretion_rate = 1.2e18 * (1.0 - np.exp(-0.2 * self.state.time))
+        self.state.accretion_inner = self.state.isco_radius
+        self.state.accretion_outer = 12.0 * self.state.schwarzschild_radius
+        self.state.accretion_max_temp = 1.5e7

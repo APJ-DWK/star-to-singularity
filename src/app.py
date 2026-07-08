@@ -39,7 +39,7 @@ class Application:
         self.renderer = Renderer(config.WINDOW_WIDTH, config.WINDOW_HEIGHT)
 
         # UI Subsystems
-        self.controls = InteractiveControls(self.state)
+        self.controls = InteractiveControls(self.state, self.engine.phase_manager)
         self.hud = HUD(self.state)
         self.graphs = RealTimeGraphs(self.state)
         self.overlays = EducationalOverlays(self.state)

@@ -18,8 +18,9 @@ class InteractiveControls:
     Exposes sliders and buttons to modify simulation state parameters.
     """
 
-    def __init__(self, state):
+    def __init__(self, state, phase_manager=None):
         self.state = state
+        self.phase_manager = phase_manager
 
     def render(self, gui):
         """
@@ -66,11 +67,11 @@ class InteractiveControls:
         # ── Phase Selection ──────────────────────────────────────────
         gui.text("Life Cycle Phases")
         if gui.button("Prev Phase"):
-            # Handled via app controller or state machine
-            pass
+            if self.phase_manager:
+                self.phase_manager.prev_phase()
         if gui.button("Next Phase"):
-            # Handled via app controller or state machine
-            pass
+            if self.phase_manager:
+                self.phase_manager.next_phase()
 
         gui.text("-" * 28)
 

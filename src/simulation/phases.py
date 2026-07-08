@@ -47,6 +47,10 @@ class PhaseManager:
             print(f"[Phase] Transitioning from {self.state.current_phase} to {phase_name}")
             self.state.current_phase = phase_name
             self.state.phase_progress = 0.0
+            
+            # Set supernova particle spawn trigger when entering supernova
+            if phase_name == Phase.SUPERNOVA:
+                self.state.supernova_trigger = True
             return True
         return False
 
@@ -79,6 +83,12 @@ class PhaseManager:
         - Once core collapse completes in stellar_death, trigger supernova.
         - Once supernova explosion finishes, form black_hole.
         """
-        # This will be fully implemented in physics milestone integrations.
-        # For now, it remains a stub called by the simulation engine.
-        pass
+        if self.state.current_phase == Phase.STELLAR_BIRTH:
+            if self.state.stellar_hydrogen <= 0.0:
+                self.set_phase(Phase.STELLAR_DEATH)
+        elif self.state.current_phase == Phase.STELLAR_DEATH:
+            if self.state.phase_progress >= 1.0:
+                self.set_phase(Phase.SUPERNOVA)
+        elif self.state.current_phase == Phase.SUPERNOVA:
+            if self.state.phase_progress >= 1.0:
+                self.set_phase(Phase.BLACK_HOLE)

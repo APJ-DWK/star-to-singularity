@@ -30,6 +30,11 @@ class SimulationState:
         # ── Phase Control ────────────────────────────────────────────
         self.current_phase = "stellar_birth"
         self.phase_progress = 0.0  # Normalized progress within the phase (0.0 to 1.0)
+        self.core_density = 0.0     # g/cm^3
+        self.core_temperature = 0.0 # Kelvin
+        self.supernova_flash = 0.0  # Brightness multiplier for explosion flash
+        self.remnant_mass = 0.0     # M_sun
+        self.supernova_trigger = False # Spawns particles in renderer when True
 
         # ── Stellar Parameters ───────────────────────────────────────
         self.stellar_mass = config.DEFAULT_STELLAR_MASS  # Initial mass in M☉
@@ -63,6 +68,11 @@ class SimulationState:
         self.paused = False
         self.current_phase = "stellar_birth"
         self.phase_progress = 0.0
+        self.core_density = 0.0
+        self.core_temperature = 0.0
+        self.supernova_flash = 0.0
+        self.remnant_mass = 0.0
+        self.supernova_trigger = False
 
         self.stellar_mass = config.DEFAULT_STELLAR_MASS
         self.stellar_radius = 1.0
