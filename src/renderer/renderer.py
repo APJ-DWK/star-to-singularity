@@ -160,9 +160,36 @@ class Renderer:
             dist = ti.sqrt(dx*dx + dy*dy)
             
             color = ti.Vector([0.0, 0.0, 0.0])
+
+            # ── Calculate dynamic fade / emergence factors on the GPU ──
+            lensing_factor = 0.0
+            disk_fade = 0.0
+            photon_ring_fade = 0.0
+            horizon_fade = 0.0
+            ejecta_fade = 1.0
+
+            if phase == 3:
+                lensing_factor = 1.0
+                disk_fade = 1.0
+                photon_ring_fade = 1.0
+                horizon_fade = 1.0
+                ejecta_fade = 0.0
+            elif phase == 2:
+                ejecta_fade = ti.max(0.0, 1.0 - progress)
+                if progress >= 0.3:
+                    t_collapse = (progress - 0.3) / 0.7
+                    lensing_factor = t_collapse * t_collapse * t_collapse
+                    disk_fade = ti.max(0.0, (t_collapse - 0.25) / 0.75)
+                    photon_ring_fade = ti.max(0.0, (t_collapse - 0.40) / 0.60)
+                    horizon_fade = ti.max(0.0, (t_collapse - 0.70) / 0.30)
+
+            supernova_color = ti.Vector([0.0, 0.0, 0.0])
+            black_hole_color = ti.Vector([0.0, 0.0, 0.0])
+
+            r_eh = 0.08  # Event horizon shadow boundary
             
+            # ── 1. STAR & SUPERNOVA pass (for phases <= 2) ──
             if phase == 0 or phase == 1 or phase == 2:
-                # ── STAR & SUPERNOVA Pass ────────────────────────────────────
                 r_bound = 0.38 * (radius / 6.034)
                 
                 # Check if inside main stellar/envelope body
@@ -194,10 +221,9 @@ class Renderer:
                     
                     if phase == 2:
                         # Envelope dims/disperses as shock front expands
-                        fade = ti.max(0.0, 1.0 - progress)
-                        color = surf_color * fade
+                        supernova_color = surf_color * ejecta_fade
                     else:
-                        color = surf_color
+                        supernova_color = surf_color
                 else:
                     # Outside Star: Corona, Solar Flares & Supernova shockwaves
                     dist_ratio = (dist - r_bound) / r_bound
@@ -207,19 +233,18 @@ class Renderer:
                     corona_intensity = ti.exp(-dist_ratio * 12.0) * (1.0 + corona_noise * 0.7)
                     corona_color = temp_to_rgb_gpu(temperature * 1.3)
                     
-                    color = corona_color * corona_intensity * 0.45
+                    supernova_color = corona_color * corona_intensity * 0.45
                     
                     # Solar prominence loop simulation (pinkish H-alpha loops on limb)
                     if phase <= 1:
                         flare_angle = ti.atan2(dy, dx)
                         prominence = ti.sin(flare_angle * 6.0 + time) * ti.cos(flare_angle * 3.0 - time * 0.4) * ti.exp(-dist_ratio * 4.0)
                         if prominence > 0.20:
-                            color += ti.Vector([1.0, 0.15, 0.25]) * prominence * 0.3
+                            supernova_color += ti.Vector([1.0, 0.98, 0.95]) * prominence * 0.22
                             
                     # Supernova expanding shockwave ring layers
                     if phase == 2:
-                        fade = ti.max(0.0, 1.0 - progress)
-                        color *= fade
+                        supernova_color *= ejecta_fade
                         
                         # Double shockwave layers
                         flare_angle = ti.atan2(dy, dx)
@@ -228,13 +253,13 @@ class Renderer:
                         ring_dist = dist - (progress * 0.20)
                         ring_int = ti.exp(-ti.abs(ring_dist) * 30.0) * (ti.sin(flare_angle * 12.0) * 0.3 + 0.7)
                         if ring_int > 0.01:
-                            color += ti.Vector([1.0, 0.4, 0.1]) * ring_int * 2.0
+                            supernova_color += ti.Vector([1.0, 0.4, 0.1]) * ring_int * 2.0
                             
                         # Inner fallback/ejecta shell
                         ring_dist2 = dist - (progress * 0.1)
                         ring_int2 = ti.exp(-ti.abs(ring_dist2) * 20.0) * (ti.cos(flare_angle * 8.0) * 0.2 + 0.8)
                         if ring_int2 > 0.01:
-                            color += ti.Vector([0.9, 0.2, 0.05]) * ring_int2 * 1.8
+                            supernova_color += ti.Vector([0.9, 0.2, 0.05]) * ring_int2 * 1.8
 
                 # ── Collapsing Remnant Core overlay ──────────────────────────
                 if phase == 2 and progress >= 0.3:
@@ -263,15 +288,20 @@ class Renderer:
                         if progress >= 0.8:
                             fade_core = ti.max(0.0, (0.95 - progress) / 0.15)
                             
-                        color = core_color * mu_c * fade_core
+                        supernova_color = core_color * mu_c * fade_core
 
                 # Core bounce explosion flash overlay
                 if phase == 2:
-                    color += ti.Vector([1.0, 0.95, 0.9]) * flash
-                    
-            elif phase == 3:
-                # ── BLACK HOLE Pass ──────────────────────────────────────────
-                r_eh = 0.04  # Event horizon visual boundary
+                    supernova_color += ti.Vector([1.0, 0.95, 0.9]) * flash
+
+                # Dim supernova color inside event horizon shadow as it forms
+                r_eh = 0.10
+                if dist <= r_eh:
+                    supernova_color *= (1.0 - horizon_fade)
+
+            # ── 2. BLACK HOLE pass (for phases >= 2) ──
+            if phase >= 2:
+                  # Event horizon shadow boundary
                 
                 # Project accretion disk ellipse
                 tilt = ti.max(0.15, ti.abs(ti.sin(pitch)))
@@ -282,118 +312,121 @@ class Renderer:
                 rx = dx * cy - dy * sy
                 ry = dx * sy + dy * cy
                 
-                # =====================================================
-                # Approximate gravitational lensing warp
-                # =====================================================
+                # Relativistic lensing deflection mapping (Gargantua style warp)
+                r_screen = dist
+                deflection = 0.0
 
-                r_screen = ti.sqrt(rx * rx + ry * ry) + 1e-5
+                if r_screen > r_eh:
 
-                warp_strength = 0.020
+                    # Restrict lensing to the immediate vicinity of the black hole
+                    local = ti.exp(-ti.pow(r_screen / (r_eh * 3.2), 2.0))
 
-                warp = warp_strength / (r_screen + r_eh * 0.6)
+                    deflection = (
+                        ti.pow(r_eh / (r_screen - r_eh * 0.95), 1.8)
+                        * lensing_factor
+                        * local
+                    )
 
-                warp = ti.min(warp, 0.45)
-
-                wx = rx * (1.0 + warp)
-                wy = ry * (1.0 + warp)
-
-                dist_disk = ti.sqrt(wx * wx + (wy / tilt) ** 2.0)
+                # Apply lensing
+                wx = rx * (1.0 + deflection * 0.16)
+                wy = ry * (1.0 + deflection * 0.16)
+                dist_disk = ti.sqrt(rx * rx + (ry / tilt) ** 2.0)
                 
-                r_in = r_eh * 1.5
+                r_in = r_eh * 1.35
                 r_out = r_eh * 6.0
                 
                 if dist <= r_eh:
-                    color = ti.Vector([0.0, 0.0, 0.0])  # Singular darkness
+                    black_hole_color = ti.Vector([0.0, 0.0, 0.0])
                 else:
                     # Photon Sphere lensing glow ring right outside EH
-                    photon_sphere_radius = r_eh * 1.5
-
-                    # Thin, sharp photon ring
-                    ring_width = r_eh * 0.05
-                    ps_ring = ti.exp(-((dist - photon_sphere_radius) / ring_width) ** 2)
-
-                    # Bright white photon ring
+                    # Razor thin, extremely bright, physically plausible, and perfectly stationary
+                    r_ph = r_eh * 1.02
+                    ring_width = r_eh * 0.015
+                    ps_ring = ti.exp(-((r_screen - r_ph) / ring_width) ** 2)
                     ring_color = ti.Vector([1.0, 0.98, 0.95])
-
-                    ring_angle = ti.atan2(ry, rx)
-
-                    ring_noise = 0.85 + 0.15 * fbm(
-                        ti.Vector([
-                            ring_angle * 8.0,
-                            dist * 180.0,
-                            time
-                        ])
-                    )
-
-                    color += ring_color * ps_ring * 3.4 * ring_noise
+                    black_hole_color += ring_color * ps_ring * 5.0 * photon_ring_fade
                     
                     if dist_disk >= r_in and dist_disk <= r_out:
                         # Keplerian differential shear: inner regions spin faster!
-                        shear = time * 2.5 * (r_in / dist_disk)
-                        angle = ti.atan2(wy / tilt, wx) - shear
+                        base_angle = ti.atan2(ry / tilt, rx)
+
+                        plasma_angle = base_angle - time * 1.8 * (r_in / dist_disk)
                         
-                       # Multi-scale turbulent plasma
-                        gas1 = fbm(ti.Vector([dist_disk * 140.0, angle * 4.0, time * 0.25]))
-                        gas2 = fbm(ti.Vector([dist_disk * 280.0, angle * 9.0, -time * 0.45]))
+                        # Multi-scale turbulent plasma noise
+                        streaks = fbm(ti.Vector([
+                            dist_disk * 180.0,
+                            plasma_angle * 6.0,
+                            time * 0.4
+                        ]))
 
-                        gas = 0.65 * gas1 + 0.35 * gas2
+                        filaments = 0.5 + 0.5 * ti.sin(
+                            dist_disk * 120.0
+                            - plasma_angle * 2.0
+                            + time * 1.5
+                        )
 
-                        spiral = 0.5 + 0.5 * ti.sin(8.0 * angle - dist_disk * 90.0 + time * 2.5)
-
-                        gas *= (0.8 + 0.4 * spiral)
-
-                        # -------- Physics --------
-                        t_disk = 1.8e7 * ti.pow(r_in / dist_disk, 0.75)
-                        local_temp = t_disk * (0.70 + gas * 0.65)
-
-                        # -------- Visual rendering --------
-                        visual_temp = 4200.0 + 18000.0 * ti.pow(r_in / dist_disk, 0.82)
-                        visual_temp *= (0.85 + gas * 0.30)
-
+                        micro = fbm(ti.Vector([
+                            dist_disk * 360.0,
+                            plasma_angle * 12.0,
+                            -time * 0.8
+                        ]))
+                        
+                        # Combine to create rich procedural plasma
+                        gas = 0.5 * streaks + 0.3 * filaments + 0.2 * micro
+                        
+                        # Gravitational redshift factor: z_factor = sqrt(1 - r_s / r)
+                        redshift = ti.sqrt(ti.max(0.0, 1.0 - r_eh / dist_disk))
+                        
+                        # Observed temperature after redshift
+                        t_emit = 4000.0 + 24000.0 * ti.pow(r_in / dist_disk, 1.5)
+                        visual_temp = t_emit * redshift * (0.85 + gas * 0.30)
+                        
                         disk_color = temp_to_rgb_gpu(visual_temp)
                         # Warm the accretion disk
                         warm = ti.Vector([1.15, 1.05, 0.75])
                         disk_color *= warm
-
-                        # Clamp to valid range
+                        
                         disk_color = ti.Vector([
                             ti.min(disk_color.x, 1.0),
                             ti.min(disk_color.y, 1.0),
                             ti.min(disk_color.z, 1.0)
                         ])
-                        # Cubic Doppler Beaming factor: beaming ∝ Doppler^3
-                        cp = ti.cos(pitch)
-                        velocity = ti.min(0.62, ti.sqrt(r_in / dist_disk) * 0.52)
-
-                        doppler = 1.0 + velocity * (-wx / dist_disk)
-                        beaming = ti.pow(doppler, 3.0)
-
-                        # Prevent the far side from disappearing
-                        beaming = ti.max(0.35, beaming)
                         
-                        # Smooth boundaries fade out
+                        # Doppler Beaming factor (relativistic)
+                        velocity = ti.sqrt(r_in / dist_disk) * 0.62
+                        doppler = 1.0 + velocity * (-wx / dist_disk) * ti.abs(ti.cos(pitch))
+                        beaming = ti.pow(doppler, 3.5)
+                        beaming = ti.max(0.15, beaming) # Receding side dim but visible
+                        
+                        # Smooth boundary fade out
                         edge_fade = ti.sin((dist_disk - r_in) / (r_out - r_in) * 3.14159265)
-
                         inner_glow = ti.exp(-(dist_disk - r_in) * 16.0)
                         edge_fade *= (0.65 + inner_glow)
                         
-                        # Accretion disk color mapping
-                        color += disk_color * beaming * edge_fade * 1.2
-
+                        black_hole_color += disk_color * beaming * edge_fade * 1.2 * disk_fade
+                        
                         # ----- Secondary lensed image -----
-                        lensed = ti.exp(-((ry / tilt) * (ry / tilt)) * 8.0)
+                        # Accretion disk lensed behind event horizon shadow
+                        lensed = ti.exp(-((ry / tilt) * (ry / tilt)) * 4.5)
 
-                        color += (
+                        black_hole_color += (
                             disk_color
-                            * 0.22
+                            * 0.45
                             * lensed
                             * edge_fade
                         )
                     else:
                         # Background bloom from hot inner accretion disk
                         bloom_intensity = ti.exp(-(dist - r_eh) / r_eh * 1.5)
-                        color += temp_to_rgb_gpu(55000.0) * bloom_intensity * 0.15
-                        
+                        black_hole_color += temp_to_rgb_gpu(55000.0) * bloom_intensity * 0.15 * disk_fade
+            
+            # Combine the two passes
+            color = supernova_color + black_hole_color
+            
+            # If phase is exactly 3 (black hole), make sure the event horizon is solid black shadow
+            if phase == 3 and dist <= r_eh:
+                color = ti.Vector([0.0, 0.0, 0.0])
+                
             self.star_image[i, j] = color
 
     def render(self, state, canvas):
@@ -424,86 +457,88 @@ class Renderer:
         elif state.current_phase == "black_hole":
             phase_int = 3
 
-        # 4. Update background starfield (applying gravitational lensing)
+        # 4. Update background starfield (applying gravitational lensing and flash fade)
         if self.show_background:
             self.starfield.update(
                 self.camera,
                 mask_radius,
                 phase_int,
                 state.remnant_mass,
-                state.phase_progress
+                state.phase_progress,
+               
             )
 
         # 5. Handle particle spawning and updates
         center_x = 0.5 + self.camera.pan[0]
         center_y = 0.5 + self.camera.pan[1]
         
-        if state.current_phase == "stellar_birth":
-            # Reset particles on start/reset
-            self.particles.reset()
-            # Spawn minor solar prominence loops
-            self.particles.spawn_stellar_prominence(
-                center_x,
-                center_y,
-                0.45 * (state.stellar_radius / 6.034),
-                self.camera.aspect_ratio,
-                state.time,
-                10
-            )
-            self.particles.update(state.dt, center_x, center_y, gravity=0.03, spin=0.0)
-            
-        elif state.current_phase == "stellar_death":
-            # Spawn larger RSG prominence loops
-            self.particles.spawn_stellar_prominence(
-                center_x,
-                center_y,
-                0.45 * (state.stellar_radius / 6.034),
-                self.camera.aspect_ratio,
-                state.time,
-                18
-            )
-            self.particles.update(state.dt, center_x, center_y, gravity=0.015, spin=0.0)
-            
-        elif state.current_phase == "supernova":
-            if state.supernova_trigger:
-                state.supernova_trigger = False
-                base_color = ti.Vector([1.0, 0.82, 0.35]) # hot gas ejecta color
+        if not state.paused:
+            if state.current_phase == "stellar_birth":
+                # Reset particles on start/reset
                 self.particles.reset()
-                self.particles.spawn_supernova_ejecta(
-                    center_x,
-                    center_y,
-                    0.02,  # min speed
-                    0.10,  # max speed
-                    base_color,
-                    self.camera.aspect_ratio
-                )
-            
-            # During fallback core collapse stage (progress >= 0.5)
-            if state.phase_progress >= 0.5:
-                # Spawn gas collapsing inward
-                self.particles.spawn_infall_gas(
+                # Spawn minor solar prominence loops
+                self.particles.spawn_stellar_prominence(
                     center_x,
                     center_y,
                     0.45 * (state.stellar_radius / 6.034),
                     self.camera.aspect_ratio,
-                    40
+                    state.time,
+                    10
                 )
-                # Strong collapse gravity pull and swirling accretion spin
-                self.particles.update(state.dt, center_x, center_y, gravity=0.24, spin=0.14)
-            else:
-                self.particles.update(state.dt, center_x, center_y, gravity=0.02, spin=0.0)
+                self.particles.update(state.dt, center_x, center_y, 0.03, 0.0, self.camera, phase_int, state.remnant_mass, state.phase_progress)
                 
-        elif state.current_phase == "black_hole":
-            # Spawn infalling gas continuously
-            self.particles.spawn_infall_gas(
-                center_x,
-                center_y,
-                0.40,
-                self.camera.aspect_ratio,
-                30
-            )
-            # Black hole gravity pull and swirling accretion spin
-            self.particles.update(state.dt, center_x, center_y, gravity=0.34, spin=0.20)
+            elif state.current_phase == "stellar_death":
+                # Spawn larger RSG prominence loops
+                self.particles.spawn_stellar_prominence(
+                    center_x,
+                    center_y,
+                    0.45 * (state.stellar_radius / 6.034),
+                    self.camera.aspect_ratio,
+                    state.time,
+                    18
+                )
+                self.particles.update(state.dt, center_x, center_y, 0.015, 0.0, self.camera, phase_int, state.remnant_mass, state.phase_progress)
+                
+            elif state.current_phase == "supernova":
+                if state.supernova_trigger:
+                    state.supernova_trigger = False
+                    base_color = ti.Vector([1.0, 0.82, 0.35]) # hot gas ejecta color
+                    self.particles.reset()
+                    self.particles.spawn_supernova_ejecta(
+                        center_x,
+                        center_y,
+                        0.02,  # min speed
+                        0.10,  # max speed
+                        base_color,
+                        self.camera.aspect_ratio
+                    )
+                
+                # During fallback core collapse stage (progress >= 0.30)
+                if state.phase_progress >= 0.30:
+                    # Spawn gas collapsing inward
+                    self.particles.spawn_infall_gas(
+                        center_x,
+                        center_y,
+                        0.45 * (state.stellar_radius / 6.034),
+                        self.camera.aspect_ratio,
+                        40
+                    )
+                    # Strong collapse gravity pull and swirling accretion spin
+                    self.particles.update(state.dt, center_x, center_y, 0.24, 0.14, self.camera, phase_int, state.remnant_mass, state.phase_progress)
+                else:
+                    self.particles.update(state.dt, center_x, center_y, 0.02, 0.0, self.camera, phase_int, state.remnant_mass, state.phase_progress)
+                    
+            elif state.current_phase == "black_hole":
+                # Spawn infalling gas continuously
+                self.particles.spawn_infall_gas(
+                    center_x,
+                    center_y,
+                    0.40,
+                    self.camera.aspect_ratio,
+                    30
+                )
+                # Black hole gravity pull and swirling accretion spin
+                self.particles.update(state.dt, center_x, center_y, 0.34, 0.20, self.camera, phase_int, state.remnant_mass, state.phase_progress)
 
         # 6. Execute unified GPU shader scene render pass
         self._render_scene_kernel(
@@ -529,5 +564,3 @@ class Renderer:
 
         # 8. Composite particles (prominences, supernova ejecta, accretion spirals)
         self.particles.render(canvas)
-
-

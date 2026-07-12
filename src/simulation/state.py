@@ -23,6 +23,7 @@ class SimulationState:
     def __init__(self):
         # ── Time and Controls ────────────────────────────────────────
         self.time = 0.0          # Accumulated simulation time (seconds)
+        self.anim_time = 0.0     # Animation time that freezes when paused
         self.dt = 0.0            # Timestep for the current frame (seconds)
         self.time_scale = config.DEFAULT_TIME_SCALE  # Time acceleration factor
         self.paused = False      # Pause state
@@ -36,6 +37,15 @@ class SimulationState:
         self.remnant_mass = 0.0     # M_sun
         self.supernova_trigger = False # Spawns particles in renderer when True
         self.core_radius = 0.0      # Solar radii (remnant core)
+
+        # ── Transition Control (Supernova → Black Hole) ──────────────
+        self.transition_progress = 0.0   # 0..1 progress of SN→BH transition
+        self.ejecta_opacity = 1.0        # Opacity of expanding supernova ejecta
+        self.core_collapse_frac = 0.0    # How much the iron core has collapsed
+        self.lensing_strength = 0.0      # Gravitational lensing intensity 0..1
+        self.photon_ring_alpha = 0.0     # Photon ring visibility 0..1
+        self.disk_alpha = 0.0            # Accretion disk visibility 0..1
+        self.horizon_darkness = 0.0      # Event horizon darkness 0..1
 
         # ── Stellar Parameters ───────────────────────────────────────
         self.stellar_mass = config.DEFAULT_STELLAR_MASS  # Initial mass in M☉
@@ -63,6 +73,7 @@ class SimulationState:
     def reset(self):
         """Reset the simulation state to initial conditions."""
         self.time = 0.0
+        self.anim_time = 0.0
         self.dt = 0.0
         self.time_scale = config.DEFAULT_TIME_SCALE
         self.paused = False
@@ -74,6 +85,14 @@ class SimulationState:
         self.remnant_mass = 0.0
         self.supernova_trigger = False
         self.core_radius = 0.0
+
+        self.transition_progress = 0.0
+        self.ejecta_opacity = 1.0
+        self.core_collapse_frac = 0.0
+        self.lensing_strength = 0.0
+        self.photon_ring_alpha = 0.0
+        self.disk_alpha = 0.0
+        self.horizon_darkness = 0.0
 
         self.stellar_mass = config.DEFAULT_STELLAR_MASS
         self.stellar_radius = 1.0

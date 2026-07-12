@@ -161,54 +161,42 @@ class SimulationEngine:
             flash2 = 2.5 * np.exp(-80.0 * ((progress - 0.78) ** 2.0))
         self.state.supernova_flash = flash1 + flash2
         
-        # 2. Envelope expansion (gas shell expands rapidly outwards)
-        if progress < 0.25:
-            expand = progress / 0.25
-            self.state.stellar_radius = (
-                r_supergiant * (1.0 + 0.30 * expand)
-            )
-        else:
-            t = (progress - 0.25) / 0.75
-            self.state.stellar_radius = (
-                r_supergiant * (1.30 + 0.45 * t)
-            )
-        print("Supernova Radius =", self.state.stellar_radius)
+        # 2. Envelope expansion (gas shell expands rapidly outwards - NEVER freezes)
+        self.state.stellar_radius = r_supergiant * (1.0 + 1.2 * progress)
+        self.state.ejecta_opacity = max(0.0, 1.0 - progress)
         
-        # ----------------------------------------------------------
         # 3. Remnant Core Collapse
-        # ----------------------------------------------------------
-
-        if progress < 0.30:
-
-            # Core hidden behind dense envelope
-            self.state.core_radius = 0.0
-            self.state.core_density = 1e6
-            self.state.core_temperature = 3e9
-
-        else:
-
-            # Collapse progress
+        if progress >= 0.30:
+            # Collapse progress goes 0.0 to 1.0
             t = (progress - 0.30) / 0.70
             t = min(max(t, 0.0), 1.0)
 
-            # Slow → Fast collapse
-            collapse = t * t * (3.0 - 2.0 * t)
+            # Smooth accelerating collapse curve (cubic ease-in)
+            collapse = t * t * t
+            self.state.core_collapse_frac = collapse
 
             r_start = 0.15 * r_main
             r_end = 0.04
+            self.state.core_radius = r_start * (1.0 - collapse) + r_end * collapse
 
-            self.state.core_radius = (
-                r_start * (1.0 - collapse)
-                + r_end * collapse
-            )
-
-            phys = calculate_collapse_physics(
-                t,
-                self.state.stellar_mass
-            )
-
+            phys = calculate_collapse_physics(t, self.state.stellar_mass)
             self.state.core_density = phys["core_density"]
             self.state.core_temperature = phys["core_temperature"]
+
+            # Gradual emergence of black hole characteristics
+            self.state.lensing_strength = collapse  # cubic ease-in
+            self.state.disk_alpha = max(0.0, (t - 0.25) / 0.75)
+            self.state.photon_ring_alpha = max(0.0, (t - 0.40) / 0.60)
+            self.state.horizon_darkness = max(0.0, (t - 0.70) / 0.30)
+        else:
+            self.state.core_radius = 0.15 * r_main
+            self.state.core_density = 1e6
+            self.state.core_temperature = 3e9
+            self.state.core_collapse_frac = 0.0
+            self.state.lensing_strength = 0.0
+            self.state.disk_alpha = 0.0
+            self.state.photon_ring_alpha = 0.0
+            self.state.horizon_darkness = 0.0
 
         # 4. Cooling of expanding ejecta envelope
         self.state.stellar_temperature = 100000.0 * np.exp(-3.0 * progress) + 3000.0
@@ -238,3 +226,10 @@ class SimulationEngine:
         self.state.accretion_inner = self.state.isco_radius
         self.state.accretion_outer = 12.0 * self.state.schwarzschild_radius
         self.state.accretion_max_temp = 1.5e7
+
+        # Ensure all black hole features are at full strength
+        self.state.lensing_strength = 1.0
+        self.state.disk_alpha = 1.0
+        self.state.photon_ring_alpha = 1.0
+        self.state.horizon_darkness = 1.0
+        self.state.ejecta_opacity = 0.0

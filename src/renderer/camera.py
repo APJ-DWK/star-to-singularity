@@ -33,8 +33,10 @@ class Camera:
 
     def update_from_state(self, state):
         """Sync camera settings with the centralized simulation state using cinematic transitions."""
-        # Use state.dt, with a fallback if simulation is paused to keep camera responsive
-        dt = state.dt if (state.dt > 0.0 and not state.paused) else 0.016
+        # Freeze automatic camera transitions when paused
+        dt = 0.0
+        if not state.paused:
+            dt = state.dt
         
         target_zoom = 1.0
         target_pan = np.array([0.0, 0.0], dtype=float)
@@ -46,7 +48,7 @@ class Camera:
             target_zoom = 0.10
         elif phase == "stellar_death":
             if progress < 0.7:
-                # Expand to red supergiant: zoom out from 1.0 to 0.15
+                # Expand to red supergiant: zoom out from 1.0 to 0.20
                 t_exp = progress / 0.7
                 target_zoom = 1.0 + (0.20 - 1.0) * (1.0 - (1.0 - t_exp) ** 2.0)
             else:
@@ -62,17 +64,18 @@ class Camera:
                 target_pan[0] += shake_amp
                 target_pan[1] += shake_amp * 0.7
             else:
-                # Core collapse fallback: zoom in smoothly from 0.8 to 1.0
+                # Core collapse fallback: zoom in smoothly from 0.20 to 0.5
                 t_zoom = (progress - 0.35) / 0.65
-                target_zoom = 0.20 + (0.5 - 0.20) * (t_zoom ** 3.0)
+                target_zoom = 0.20 + (0.50 - 0.20) * (t_zoom ** 3.0)
         elif phase == "black_hole":
-            target_zoom = 0.5
+            target_zoom = 0.50
             
         # Smoothly interpolate towards target settings
-        lerp_speed = 2.0
-        step = min(1.0, dt * lerp_speed)
-        self.zoom += (target_zoom - self.zoom) * step
-        self.pan += (target_pan - self.pan) * step
+        if dt > 0.0:
+            lerp_speed = 2.0
+            step = min(1.0, dt * lerp_speed)
+            self.zoom += (target_zoom - self.zoom) * step
+            self.pan += (target_pan - self.pan) * step
         
         # Write back to state so other systems remain in sync
         state.camera_zoom = float(self.zoom)

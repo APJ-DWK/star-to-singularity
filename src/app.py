@@ -54,7 +54,7 @@ class Application:
         self.is_dragging = False
 
         # Options
-        self.ambient_rotation_enabled = True
+        self.ambient_rotation_enabled = False
 
     def _init_taichi(self):
         """Initialize Taichi with GPU architecture fallback to CPU."""
@@ -110,7 +110,7 @@ class Application:
             self.engine.update(capped_dt)
 
             # 4. Camera Ambient Rotation (slow drift if not user orbiting)
-            if self.ambient_rotation_enabled and not self.is_dragging:
+            if self.ambient_rotation_enabled and not self.is_dragging and not self.state.paused:
                 self.renderer.camera.yaw += 0.04 * capped_dt
 
             # 5. Render Scene (GPU parallel projection and canvas composite)

@@ -35,3 +35,29 @@ MAX_PARTICLES = 50000
 
 # Background star count for the starfield
 BACKGROUND_STAR_COUNT = 2000
+
+# ── Phase Duration Configuration (seconds of wall-clock time) ────────
+PHASE_DURATION_STELLAR_BIRTH = 25.0
+PHASE_DURATION_STELLAR_DEATH = 8.0
+PHASE_DURATION_SUPERNOVA = 10.0
+PHASE_DURATION_SN_TO_BH = 8.0
+
+# ── Black Hole Renderer ─────────────────────────────────────────────
+# Event horizon visual radius in NDC (normalized device coords)
+BH_EVENT_HORIZON_RADIUS = 0.04
+# Photon ring width as fraction of event horizon radius
+BH_PHOTON_RING_WIDTH = 0.03
+# Accretion disk inner edge as multiple of event horizon radius
+BH_DISK_INNER_MULT = 1.5
+# Accretion disk outer edge as multiple of event horizon radius
+BH_DISK_OUTER_MULT = 7.0
+# Noise octaves for turbulent plasma (lower = faster on Intel UHD)
+BH_NOISE_OCTAVES = 3
+# Maximum Doppler velocity factor
+BH_MAX_DOPPLER_VELOCITY = 0.62
+
+# ── Camera Configuration ─────────────────────────────────────────────
+CAMERA_LERP_SPEED = 2.0
+CAMERA_DRAG_SENSITIVITY = 4.0
+CAMERA_AMBIENT_ROTATION_SPEED = 0.04
+CAMERA_DAMPING = 0.92

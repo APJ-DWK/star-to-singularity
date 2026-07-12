@@ -145,7 +145,7 @@ class BackgroundStarfield:
                 lensing_factor = 0.0
                 if phase == 3:
                     is_lensing = True
-                    lensing_factor = 1.0
+                    lensing_factor = 0.55
                 elif phase == 2 and progress >= 0.5:
                     is_lensing = True
                     # Scale from 0.0 to 1.0 as core collapse progresses
@@ -157,15 +157,23 @@ class BackgroundStarfield:
                 if is_lensing:
                     # Gravitational lensing deflection math:
                     # Calculate Einstein radius in NDC coordinates (scales with remnant mass)
-                    theta_E = 0.12 * (remnant_mass / 3.0) * lensing_factor
+                    theta_E = 0.03 * (remnant_mass / 3.0) * lensing_factor
                     
                     du = u - 0.5 - pan_x
                     dv = (v - 0.5 - pan_y) / aspect_ratio
                     dx = du / zoom
                     dy = dv / zoom
                     theta_in = ti.sqrt(dx*dx + dy*dy)
+
+                    # Only lens stars close to the black hole
+                    if theta_in > theta_E * 2.0:
+                        is_lensing = False
+
+                    # Ignore stars that are far from the black hole.
+                    if theta_in > 0.12:
+                        is_lensing = False
                     
-                    if theta_in > 1e-5:
+                    if is_lensing and theta_in > 1e-5:
                         # Solve lens equation: theta_out^2 - theta_in * theta_out - theta_E^2 = 0
                         scale = 0.5 * (1.0 + ti.sqrt(1.0 + 4.0 * theta_E * theta_E / (theta_in * theta_in)))
 
@@ -183,8 +191,9 @@ class BackgroundStarfield:
                         v = 0.5 + 0.5 * ndc_y_l + pan_y
                         
                         # Event horizon occlusion check (shadow radius is ~2.6 * r_s visually)
-                        r_eh = 0.065 * lensing_factor
-                        if ti.sqrt(lensed_dx*lensed_dx + lensed_dy*lensed_dy) <= r_eh:
+                        r_eh = 0.04 * lensing_factor
+                        disk_mask = r_eh * 5.6
+                        if ti.sqrt(lensed_dx*lensed_dx + lensed_dy*lensed_dy) <= disk_mask:
                             is_occluded = True
                     else:
                         is_occluded = True
