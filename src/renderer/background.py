@@ -87,7 +87,7 @@ class BackgroundStarfield:
             # 3. Apparent magnitude simulation (power-law: many dim stars, few bright)
             # Power law mapping: B = 0.05 + 0.95 * (1 - random)^4
             r_val = np.random.uniform(0.0, 1.0)
-            brightness[i] = 0.05 + 0.95 * (1.0 - r_val) ** 4.0
+            brightness[i] = 0.03 + 0.97 * (1.0 - r_val) ** 5.0
 
         # Load generated data to Taichi fields
         self.star_dirs.from_numpy(dirs)
@@ -150,11 +150,14 @@ class BackgroundStarfield:
                     is_lensing = True
                     # Scale from 0.0 to 1.0 as core collapse progresses
                     lensing_factor = (progress - 0.5) / 0.5
-
+                elif phase == 2:
+                    is_lensing = True
+                    lensing_factor = progress * progress
+                    
                 if is_lensing:
                     # Gravitational lensing deflection math:
                     # Calculate Einstein radius in NDC coordinates (scales with remnant mass)
-                    theta_E = 0.06 * (remnant_mass / 3.0) * lensing_factor
+                    theta_E = 0.12 * (remnant_mass / 3.0) * lensing_factor
                     
                     du = u - 0.5 - pan_x
                     dv = (v - 0.5 - pan_y) / aspect_ratio
@@ -165,6 +168,11 @@ class BackgroundStarfield:
                     if theta_in > 1e-5:
                         # Solve lens equation: theta_out^2 - theta_in * theta_out - theta_E^2 = 0
                         scale = 0.5 * (1.0 + ti.sqrt(1.0 + 4.0 * theta_E * theta_E / (theta_in * theta_in)))
+
+                        # Stronger bending very close to the event horizon
+                        if theta_in < theta_E * 2.5:
+                            scale *= 1.0 + 0.6 * (1.0 - theta_in / (theta_E * 2.5))
+                        
                         lensed_dx = dx * scale
                         lensed_dy = dy * scale
                         
@@ -175,7 +183,7 @@ class BackgroundStarfield:
                         v = 0.5 + 0.5 * ndc_y_l + pan_y
                         
                         # Event horizon occlusion check (shadow radius is ~2.6 * r_s visually)
-                        r_eh = 0.04 * lensing_factor
+                        r_eh = 0.065 * lensing_factor
                         if ti.sqrt(lensed_dx*lensed_dx + lensed_dy*lensed_dy) <= r_eh:
                             is_occluded = True
                     else:

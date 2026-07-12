@@ -9,6 +9,8 @@ Milestone: 3 (Physics Engine)
 Status: Completed (Basic Coordinator)
 """
 
+import numpy as np
+from src.physics.collapse import calculate_collapse_physics
 from src.simulation.phases import PhaseManager
 
 
@@ -83,7 +85,7 @@ class SimulationEngine:
         from src.physics.collapse import calculate_collapse_physics
 
         # Let's make the red supergiant + collapse phase take 12 seconds in visual simulation time
-        target_death_seconds = 12.0
+        target_death_seconds = 8.0
         self.state.phase_progress = min(1.0, self.state.phase_progress + dt / target_death_seconds)
 
         props = compute_stellar_properties(self.state.stellar_mass)
@@ -96,9 +98,9 @@ class SimulationEngine:
         if self.state.phase_progress < 0.7:
             t_exp = self.state.phase_progress / 0.7
             
-            # Radius expands up to 100x the main sequence radius (Red Supergiant stage)
+            # Radius expands up to 30x the main sequence radius (Red Supergiant stage)
             # Smoothly expand using a cubic ease-out shape
-            scale_factor = 1.0 + (100.0 - 1.0) * (1.0 - (1.0 - t_exp) ** 3.0)
+            scale_factor = 1.0 + (3.0 - 1.0) * (t_exp ** 1.5)
             self.state.stellar_radius = r_main * scale_factor
             
             # Temperature drops to ~3200 K (Red Supergiant temperature)
@@ -119,9 +121,10 @@ class SimulationEngine:
             t_collapse = (self.state.phase_progress - 0.7) / 0.3
             
             # Rapid core collapse & outer shell instability (pulsations)
-            pulsation = 1.0 + 0.03 * np.sin(self.state.time * 6.0)
-            r_supergiant = r_main * 100.0
+            pulsation = 1.0 + 0.001 * np.sin(self.state.time * 6.0)
+            r_supergiant = r_main * 3.0
             self.state.stellar_radius = r_supergiant * pulsation
+            print("Red Supergiant Radius =", self.state.stellar_radius)
             self.state.stellar_temperature = 3200.0
             
             r_ratio = self.state.stellar_radius
@@ -147,40 +150,63 @@ class SimulationEngine:
 
         props = compute_stellar_properties(self.state.stellar_mass)
         r_main = props["radius"]
-        r_supergiant = r_main * 100.0
+        r_supergiant = r_main * 3.0
         remnant_m = get_remnant_mass(self.state.stellar_mass)
         self.state.remnant_mass = remnant_m
 
         # 1. Supernova flash intensity (dual-peak: first at explosion, second at event horizon formation)
-        flash1 = 20.0 * np.exp(-15.0 * progress)
+        flash1 = 4.5 * np.exp(-7.5 * progress)
         flash2 = 0.0
-        if progress >= 0.7:
-            # Brief peak at 0.85 progress representing the collapse bounce/horizon flash
-            flash2 = 8.0 * np.exp(-40.0 * ((progress - 0.85) ** 2.0))
+        if progress >= 0.60:
+            flash2 = 2.5 * np.exp(-80.0 * ((progress - 0.78) ** 2.0))
         self.state.supernova_flash = flash1 + flash2
         
         # 2. Envelope expansion (gas shell expands rapidly outwards)
-        self.state.stellar_radius = r_supergiant * (1.0 + 8.0 * (progress ** 1.5))
+        if progress < 0.25:
+            expand = progress / 0.25
+            self.state.stellar_radius = (
+                r_supergiant * (1.0 + 0.30 * expand)
+            )
+        else:
+            t = (progress - 0.25) / 0.75
+            self.state.stellar_radius = (
+                r_supergiant * (1.30 + 0.45 * t)
+            )
+        print("Supernova Radius =", self.state.stellar_radius)
         
-        # 3. Remnant Core Collapse Morphing
-        # Core becomes visible after the envelope begins to thin (progress >= 0.3)
-        if progress < 0.3:
+        # ----------------------------------------------------------
+        # 3. Remnant Core Collapse
+        # ----------------------------------------------------------
+
+        if progress < 0.30:
+
+            # Core hidden behind dense envelope
             self.state.core_radius = 0.0
             self.state.core_density = 1e6
             self.state.core_temperature = 3e9
+
         else:
-            t_collapse = (progress - 0.3) / 0.7  # normalized collapse progress [0.0, 1.0]
-            
-            # Core shrinks from standard iron core size (~0.15 * r_main) to Schwarzschild radius
-            # Schwarzschild radius visually corresponds to 0.536 R_sun on our reference scale
-            r_start = r_main * 0.15
-            r_end = 0.536
-            
-            # Smooth exponential decay simulating accelerating gravity collapse
-            self.state.core_radius = r_start + (r_end - r_start) * (1.0 - np.exp(-4.5 * t_collapse)) / (1.0 - np.exp(-4.5))
-            
-            # Core parameters scale up towards black hole densities/temperatures
-            phys = calculate_collapse_physics(t_collapse, self.state.stellar_mass)
+
+            # Collapse progress
+            t = (progress - 0.30) / 0.70
+            t = min(max(t, 0.0), 1.0)
+
+            # Slow → Fast collapse
+            collapse = t * t * (3.0 - 2.0 * t)
+
+            r_start = 0.15 * r_main
+            r_end = 0.04
+
+            self.state.core_radius = (
+                r_start * (1.0 - collapse)
+                + r_end * collapse
+            )
+
+            phys = calculate_collapse_physics(
+                t,
+                self.state.stellar_mass
+            )
+
             self.state.core_density = phys["core_density"]
             self.state.core_temperature = phys["core_temperature"]
 

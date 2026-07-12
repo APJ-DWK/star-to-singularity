@@ -41,7 +41,7 @@ def compute_stellar_properties(mass_m_sun):
 
     # 2. Mass-Radius Relation (R ∝ M^0.6 for massive stars on the main sequence)
     # Massive stars have radiative envelopes and convective cores.
-    radius = 1.0 * (m ** 0.6)
+    radius = 0.8 * (m ** 0.6)
 
     # 3. Stefan-Boltzmann Temperature Relation: T = T_sun * (L_ratio / R_ratio^2)^(1/4)
     # Solar effective temperature is 5778 Kelvin

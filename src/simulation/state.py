@@ -44,7 +44,6 @@ class SimulationState:
         self.stellar_temperature = 5778.0 # Kelvin (computed)
         self.stellar_hydrogen = 1.0     # Remaining core hydrogen fraction (1.0 to 0.0)
         self.stellar_age = 0.0          # Current star age in years
-
         # ── Black Hole Parameters ────────────────────────────────────
         self.black_hole_mass = 0.0      # In kg
         self.schwarzschild_radius = 0.0 # In meters (r_s = 2GM/c^2)
@@ -58,7 +57,7 @@ class SimulationState:
         self.accretion_max_temp = 0.0   # In Kelvin
 
         # ── Camera State ─────────────────────────────────────────────
-        self.camera_zoom = 1.0
+        self.camera_zoom = 0.5
         self.camera_center = [0.0, 0.0]
 
     def reset(self):

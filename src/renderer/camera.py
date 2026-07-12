@@ -43,33 +43,33 @@ class Camera:
         progress = state.phase_progress
         
         if phase == "stellar_birth":
-            target_zoom = 1.0
+            target_zoom = 0.10
         elif phase == "stellar_death":
             if progress < 0.7:
                 # Expand to red supergiant: zoom out from 1.0 to 0.15
                 t_exp = progress / 0.7
-                target_zoom = 1.0 + (0.15 - 1.0) * (1.0 - (1.0 - t_exp) ** 2.0)
+                target_zoom = 1.0 + (0.20 - 1.0) * (1.0 - (1.0 - t_exp) ** 2.0)
             else:
                 # Stay zoomed out for the start of core collapse
-                target_zoom = 0.15
+                target_zoom = 0.20
         elif phase == "supernova":
             if progress < 0.35:
                 # Supernova explosion: stay zoomed out to frame the expanding ejecta
-                target_zoom = 0.15
+                target_zoom = 0.10
                 # Apply camera shake during the shockwave peak
                 shake_t = progress / 0.35
                 shake_amp = 0.03 * np.exp(-3.0 * shake_t) * np.sin(state.time * 70.0)
                 target_pan[0] += shake_amp
                 target_pan[1] += shake_amp * 0.7
             else:
-                # Core collapse fallback: zoom in smoothly from 0.15 to 1.8
+                # Core collapse fallback: zoom in smoothly from 0.8 to 1.0
                 t_zoom = (progress - 0.35) / 0.65
-                target_zoom = 0.15 + (1.8 - 0.15) * (t_zoom ** 2.0)
+                target_zoom = 0.20 + (0.5 - 0.20) * (t_zoom ** 3.0)
         elif phase == "black_hole":
-            target_zoom = 1.8
+            target_zoom = 0.5
             
         # Smoothly interpolate towards target settings
-        lerp_speed = 3.0
+        lerp_speed = 2.0
         step = min(1.0, dt * lerp_speed)
         self.zoom += (target_zoom - self.zoom) * step
         self.pan += (target_pan - self.pan) * step

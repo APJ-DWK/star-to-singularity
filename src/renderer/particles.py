@@ -72,8 +72,8 @@ class ParticleSystem:
             
             # High-energy ejecta colors (mix white-cyan in the core, orange-red at outer edge)
             color_rand = ti.sin(i * 123.45) * 0.5 + 0.5
-            self.color[i] = base_color * (0.8 + 0.2 * color_rand)
-            if color_rand > 0.6:
+            self.color[i] = base_color * (0.9 + 0.3 * color_rand)
+            if color_rand > 0.5:
                 # Add hot white/yellow shock front particles
                 self.color[i] = ti.Vector([1.0, 0.9, 0.8])
                 
