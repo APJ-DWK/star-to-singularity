@@ -1,8 +1,0 @@
-# Star-to-Singularity: An Interactive Black Hole Simulation
-# Python 3.12.10
-
-# GPU-accelerated parallel computing framework for physics simulation and rendering
-taichi>=1.7.0
-
-# Numerical computation
-numpy>=1.26.0
